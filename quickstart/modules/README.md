@@ -1,331 +1,111 @@
-# IoT Operations Applications
+# IoT Operations Demo Applications
 
-This directory contains containerized applications designed to be deployed to
-Azure IoT Operations Kubernetes clusters running on edge devices.
+This directory contains containerized demo applications for Azure IoT Operations
+Kubernetes clusters running on edge devices.
 
-These are mostly for demo purposes but can also be used to test and validate an
-IoT Operations build.
-
-## Available Applications
+## Applications
 
 ### Edge MQTT simulator
 
-An MQTT publisher that generates realistic factory telemetry for Azure IoT
-Operations.
+`edgemqttsim` publishes configurable factory telemetry to the Azure IoT Operations
+MQTT broker with MQTT v5 and K8S-SAT authentication.
 
-**Features:**
-
-- MQTT v5 with ServiceAccountToken (K8S-SAT) authentication
-- Configurable industrial equipment and business-event messages
-- Topic-based routing for factory telemetry
-- Automatic reconnection and message buffering
-
-**Quick Deploy:**
-
-```powershell
-.\Deploy-ToIoTEdge.ps1 -AppFolder "edgemqttsim" -RegistryName "your-username"
-```
-
-[Read the docs](./edgemqttsim/README.md)
+[Edge MQTT simulator documentation](./edgemqttsim/README.md)
 
 ### Demo historian
 
-An MQTT subscriber that stores factory telemetry in PostgreSQL and exposes a
-query API.
+`demohistorian` subscribes to factory MQTT topics, stores messages in PostgreSQL,
+and exposes health and query endpoints.
 
-**Features:**
-
-- MQTT v5 with ServiceAccountToken (K8S-SAT) authentication
-- Wildcard MQTT subscriptions
-- PostgreSQL message history and retention
-- HTTP health and query endpoints
-
-**Quick Deploy:**
-
-```powershell
-.\Deploy-ToIoTEdge.ps1 -AppFolder "demohistorian" -RegistryName "your-username"
-```
-
-[Read the docs](./demohistorian/README.md)
-
-## Deployment Scripts
-
-This folder contains three modular PowerShell deployment scripts that work with
-applications in the modules folder.
-
-### Deploy-ToIoTEdge.ps1
-
-Deploy applications to remote IoT Operations clusters through Azure Arc.
-
-**Usage:**
-
-```powershell
-.\Deploy-ToIoTEdge.ps1 -AppFolder "edgemqttsim" -RegistryName "your-username"
-.\Deploy-ToIoTEdge.ps1 -AppFolder "demohistorian" -RegistryName "myacr" -RegistryType "acr" -ImageTag "v1.0"
-```
-
-**Parameters:**
-
-- `-AppFolder` (required): Name of the application folder to deploy
-- `-RegistryName` (required): Docker Hub username or ACR name
-- `-RegistryType`: `dockerhub` or `acr` (default: `dockerhub`)
-- `-ImageTag`: Image tag (default: `latest`)
-- `-SkipBuild`: Skip Docker build and push and use an existing image
-- `-EdgeDeviceIP`: Direct SSH connection fallback
-- `-ConfigPath`: Override the default configuration location
-
-### Deploy-Local.ps1
-
-Run applications locally for development and testing.
-
-**Usage:**
-
-```powershell
-.\Deploy-Local.ps1 -AppFolder "edgemqttsim"
-.\Deploy-Local.ps1 -AppFolder "demohistorian" -Mode docker -Port 8080
-.\Deploy-Local.ps1 -AppFolder "edgemqttsim" -Mode python -Clean
-```
-
-**Parameters:**
-
-- `-AppFolder` (required): Name of the application folder to run
-- `-Mode`: `python`, `docker`, `uv`, or `auto` (default: `auto`)
-- `-Port`: Local port (default: `5000`)
-- `-Build`: Force a Docker rebuild
-- `-Clean`: Clean the Python virtual environment before setup
-
-### Deploy-Check.ps1
-
-Check deployment status and health for deployed applications.
-
-**Usage:**
-
-```powershell
-.\Deploy-Check.ps1 -AppFolder "edgemqttsim"
-.\Deploy-Check.ps1 -AppFolder "demohistorian" -EdgeDeviceIP "192.168.1.100"
-```
-
-**Parameters:**
-
-- `-AppFolder` (required): Name of the application folder to check
-- `-EdgeDeviceIP`: Direct connection to the edge device
-- `-ConfigPath`: Override the default configuration location
-
-## Deployment Workflows
-
-### Two-Machine Workflow
-
-Use this workflow when Docker and Kubernetes access are on separate machines.
-
-**On the machine with Docker:**
-
-1. Build and push the container image to Docker Hub or ACR.
-2. Note the full image name, such as `username/edgemqttsim:latest`.
-
-**On the machine with Kubernetes or Arc access:**
-
-Run the deployment script with `-SkipBuild`:
-
-```powershell
-.\Deploy-ToIoTEdge.ps1 -AppFolder "edgemqttsim" -RegistryName "your-username" -SkipBuild
-```
-
-The script detects whether Docker is missing and provides instructions for
-manual image building.
-
-### Remote Deployment
-
-Deploy applications from a Windows development machine to a remote IoT
-Operations cluster:
-
-1. Configure the cluster in `../config/aio_config.json`.
-2. Run the deployment script from the modules folder:
-
-   ```powershell
-   .\Deploy-ToIoTEdge.ps1 -AppFolder "edgemqttsim" -RegistryName "your-registry"
-   ```
-
-The script handles:
-
-- Building Docker images
-- Pushing images to the container registry
-- Connecting to Arc-enabled clusters
-- Deploying to Kubernetes
-- Verifying deployment status
-
-### Local Development
-
-Run an application locally before deploying:
-
-```powershell
-.\Deploy-Local.ps1 -AppFolder "edgemqttsim"
-```
-
-### Check Deployment Status
-
-```powershell
-.\Deploy-Check.ps1 -AppFolder "edgemqttsim"
-```
+[Demo historian documentation](./demohistorian/README.md)
 
 ## Prerequisites
 
-### Remote Deployment
+- Azure IoT Operations installed on an Arc-connected Kubernetes cluster
+- Azure CLI and `kubectl`
+- An `aio_config.json` file for the target environment
+- A container registry configured in `aio_config.json`
 
-- Docker Desktop on Windows or macOS, unless using the two-machine workflow
-- Azure CLI (`az`)
-- `kubectl`
-- Access to a container registry
-- Azure IoT Operations deployed and connected to Azure Arc
+Docker is not required on the management machine when the configured registry is
+Azure Container Registry. The deployment script uses ACR cloud builds.
 
-### Local Development
+## Quick Deploy
 
-- Python 3.8 or later, Docker, or `uv`
-- Application dependencies from the module's `requirements.txt`
+Run the tracked deployment script from the repository root and select one module:
+
+```powershell
+.\quickstart\external_configuration\Deploy-EdgeModules.ps1 -ConfigPath "<path-to-aio_config.json>" -ModuleName edgemqttsim -Force
+.\quickstart\external_configuration\Deploy-EdgeModules.ps1 -ConfigPath "<path-to-aio_config.json>" -ModuleName demohistorian -Force
+```
+
+The script:
+
+1. Loads cluster and registry settings from `aio_config.json`.
+2. Builds and pushes the selected image.
+3. Connects to the cluster through Azure Arc.
+4. Ensures the `mqtt-client` service account and registry pull secret.
+5. Refreshes the AIO-managed MQTT broker CA trust bundle in `default`.
+6. Applies the module's `deployment.yaml`.
+7. Reports deployment status and log commands.
+
+Use `-SkipBuild` only when the updated image already exists in the configured
+registry.
+
+## MQTT Security
+
+Both modules use the projected Kubernetes ServiceAccount token at
+`/var/run/secrets/tokens/broker-sat`. Before reading or sending that token, each
+client validates the MQTT broker certificate with
+`/var/run/certs/ca.crt`.
+
+For the default listener on port `18883`, Azure IoT Operations manages the broker
+certificate and public trust bundle with cert-manager and trust-manager. The
+deployment script projects that managed trust bundle into the `default` namespace
+for these demo workloads. Custom Key Vault-backed certificates should be delivered
+to Kubernetes through AIO SecretSync rather than copied directly by an application.
+
+If the CA is missing, unreadable, empty, or invalid, the application logs the
+specific certificate problem and refuses the K8S-SAT MQTT connection.
+
+## Observe the Demo
+
+```powershell
+kubectl get pods -n default -l app=edgemqttsim
+kubectl get pods -n default -l app=demohistorian
+kubectl logs -n default -l app=edgemqttsim -f
+kubectl logs -n default -l app=demohistorian -c historian -f
+```
+
+The simulator logs published telemetry. The historian logs its MQTT connection,
+subscription, and received message activity.
 
 ## Project Structure
 
 ```text
 modules/
 ├── README.md
-├── Deploy-ToIoTEdge.ps1
-├── Deploy-Local.ps1
-├── Deploy-Check.ps1
 ├── edgemqttsim/
 │   ├── app.py
-│   ├── Dockerfile
-│   ├── requirements.txt
 │   ├── deployment.yaml
+│   ├── Dockerfile
 │   ├── message_structure.yaml
+│   ├── requirements.txt
 │   └── README.md
 └── demohistorian/
     ├── app.py
+    ├── config.yaml
+    ├── deployment.yaml
     ├── Dockerfile
     ├── requirements.txt
-    ├── deployment.yaml
-    ├── config.yaml
     └── README.md
 ```
 
-## Configuration
-
-### Cluster Configuration
-
-The IoT Operations cluster configuration is stored in:
-
-```text
-../config/aio_config.json
-```
-
-This file contains:
-
-- Azure subscription details
-- Resource group name
-- Cluster name and location
-- Deployment preferences
-
-The deployment scripts read this configuration automatically.
-
-### Application Configuration
-
-Each application can provide its own configuration for settings such as:
-
-- Registry type and name
-- Image tags
-- Development port and runtime preferences
-
-## Common Commands
-
-### Build and Push to Docker Hub
-
-```bash
-cd modules/edgemqttsim
-docker build -t edgemqttsim:latest .
-docker tag edgemqttsim:latest YOUR-DOCKERHUB-USERNAME/edgemqttsim:latest
-docker login
-docker push YOUR-DOCKERHUB-USERNAME/edgemqttsim:latest
-```
-
-### Build and Push to Azure Container Registry
-
-```bash
-cd modules/edgemqttsim
-docker build -t edgemqttsim:latest .
-docker tag edgemqttsim:latest YOUR-ACR-NAME.azurecr.io/edgemqttsim:latest
-az acr login --name YOUR-ACR-NAME
-docker push YOUR-ACR-NAME.azurecr.io/edgemqttsim:latest
-```
-
-After pushing the image, deploy it from a machine without Docker:
+## Troubleshooting
 
 ```powershell
-.\Deploy-ToIoTEdge.ps1 -AppFolder "edgemqttsim" -RegistryName "YOUR-USERNAME" -SkipBuild
+kubectl describe pod -n default -l app=edgemqttsim
+kubectl describe pod -n default -l app=demohistorian
+kubectl get configmap azure-iot-operations-aio-ca-trust-bundle -n default
 ```
 
-### Deploy an Application
-
-```powershell
-.\Deploy-ToIoTEdge.ps1 -AppFolder "edgemqttsim" -RegistryName "myusername"
-.\Deploy-ToIoTEdge.ps1 -AppFolder "edgemqttsim" -RegistryName "myusername" -ImageTag "v1.0"
-```
-
-### Check Application Status
-
-```powershell
-.\Deploy-Check.ps1 -AppFolder "edgemqttsim"
-```
-
-### Run Locally
-
-```powershell
-.\Deploy-Local.ps1 -AppFolder "edgemqttsim"
-.\Deploy-Local.ps1 -AppFolder "edgemqttsim" -Mode docker
-```
-
-### View Application Logs
-
-```bash
-kubectl logs -n default -l app=edgemqttsim -f
-```
-
-### Update an Application
-
-Modify the source and redeploy with a new tag:
-
-```powershell
-.\Deploy-ToIoTEdge.ps1 -AppFolder "edgemqttsim" -RegistryName "your-username" -ImageTag "v1.1"
-```
-
-## Adding New Applications
-
-To add an application:
-
-1. Create a folder under `modules`.
-2. Add the application code, `Dockerfile`, `deployment.yaml`, and dependency
-   file.
-3. Use `<YOUR_REGISTRY>` in the deployment manifest image name.
-4. Use the `app: {app-name}` label for pod selection.
-5. Add an application README and an entry to this document.
-6. Deploy it with `Deploy-ToIoTEdge.ps1`.
-
-## Technology Stack
-
-- **Container runtime:** Docker
-- **Orchestration:** Kubernetes (K3s)
-- **Python package manager:** `uv`
-- **Edge platform:** Azure IoT Operations
-- **Cloud integration:** Azure Arc
-
-## Related Documentation
-
-- [Project README](../../README.md)
-- [Edge MQTT simulator](./edgemqttsim/README.md)
-- [Demo historian](./demohistorian/README.md)
-
-## Support
-
-For issues or questions:
-
-1. Check the application-specific README.
-2. Review the quickstart documentation.
-3. Check the Azure IoT Operations documentation.
-4. Review Kubernetes logs and events.
+Check the application-specific README and pod events for additional guidance.

@@ -34,9 +34,7 @@
   },
   "modules": {
     "edgemqttsim": false,
-    "hello-flask": false,
-    "sputnik": false,
-    "wasm-quality-filter-python": false
+    "demohistorian": false
   },
   "comments": {
     "config_type": "Advanced mode: manual control with skip flags for kubeconfig, container registry, and certificates; Quickstart mode: fully automated setup with Arc and IoT Operations.",
@@ -68,9 +66,7 @@
     },
     "modules": {
       "edgemqttsim": "Factory telemetry simulator. Enable for testing MQTT connectivity and data pipelines.",
-      "hello-flask": "Simple Flask web app. Enable for basic cluster validation.",
-      "sputnik": "Advanced application. Enable for comprehensive testing.",
-      "wasm-quality-filter-python": "WebAssembly edge filter. Enable for production edge processing."
+      "demohistorian": "MQTT historian with PostgreSQL storage and a query API."
     },
     "advanced_workflow": [
       "1. Installer sets up K3s cluster (kubeconfig optional based on skip_kubeconfig_setup)",
