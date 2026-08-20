@@ -104,6 +104,8 @@ spec:
             value: K8S-SAT
           - name: SAT_TOKEN_PATH
             value: /var/run/secrets/tokens/broker-sat
+          - name: MQTT_CA_CERT_PATH
+            value: /var/run/certs/ca.crt
           - name: MQTT_TOPIC_PREFIX
             value: factory
           
@@ -121,6 +123,9 @@ spec:
           # ServiceAccountToken for MQTT authentication
           - name: broker-sat
             mountPath: /var/run/secrets/tokens
+            readOnly: true
+          - name: aio-ca-trust-bundle
+            mountPath: /var/run/certs
             readOnly: true
         
         livenessProbe:
@@ -161,6 +166,11 @@ spec:
                   path: broker-sat
                   expirationSeconds: 86400  # 24 hours
                   audience: aio-internal
+
+        # AIO-managed public CA for MQTT broker server verification
+        - name: aio-ca-trust-bundle
+          configMap:
+            name: azure-iot-operations-aio-ca-trust-bundle
 ---
 apiVersion: v1
 kind: Service

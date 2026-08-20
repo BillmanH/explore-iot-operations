@@ -11,6 +11,7 @@ mqtt:
   reconnect_delay: 5
   protocol_version: 5  # MQTT v5 required for K8S-SAT
   sat_token_path: /var/run/secrets/tokens/broker-sat
+  ca_cert_path: /var/run/certs/ca.crt
   sat_audience: aio-internal
   client_id_prefix: historian
 

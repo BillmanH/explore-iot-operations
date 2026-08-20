@@ -40,6 +40,8 @@ spec:
           value: "K8S-SAT"  # Use Kubernetes ServiceAccountToken
         - name: SAT_TOKEN_PATH
           value: "/var/run/secrets/tokens/broker-sat"  # Token will be mounted here
+        - name: MQTT_CA_CERT_PATH
+          value: "/var/run/certs/ca.crt"
         # Message configuration path (optional, uses default if not specified)
         - name: MESSAGE_CONFIG_PATH
           value: "message_structure.yaml"
@@ -62,6 +64,9 @@ spec:
         - name: broker-sat
           mountPath: /var/run/secrets/tokens
           readOnly: true
+        - name: aio-ca-trust-bundle
+          mountPath: /var/run/certs
+          readOnly: true
       volumes:
       - name: broker-sat
         projected:
@@ -70,3 +75,6 @@ spec:
               path: broker-sat
               expirationSeconds: 86400  # 24 hours
               audience: aio-internal  # Must match broker's audience configuration
+      - name: aio-ca-trust-bundle
+        configMap:
+          name: azure-iot-operations-aio-ca-trust-bundle

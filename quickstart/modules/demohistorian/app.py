@@ -50,6 +50,7 @@ def load_config() -> Dict[str, Any]:
                 'reconnect_delay': 5,
                 'protocol_version': 5,
                 'sat_token_path': '/var/run/secrets/tokens/broker-sat',
+                'ca_cert_path': '/var/run/certs/ca.crt',
                 'sat_audience': 'aio-internal',
                 'client_id_prefix': 'historian'
             },
@@ -73,6 +74,10 @@ def load_config() -> Dict[str, Any]:
     config['mqtt']['port'] = int(os.getenv('MQTT_PORT', config['mqtt']['port']))
     config['mqtt']['auth_method'] = os.getenv('MQTT_AUTH_METHOD', config['mqtt']['auth_method'])
     config['mqtt']['sat_token_path'] = os.getenv('SAT_TOKEN_PATH', config['mqtt']['sat_token_path'])
+    config['mqtt']['ca_cert_path'] = os.getenv(
+        'MQTT_CA_CERT_PATH',
+        config['mqtt'].get('ca_cert_path', '/var/run/certs/ca.crt')
+    )
     
     # Allow disabling MQTT for local testing
     config['mqtt']['enabled'] = os.getenv('MQTT_ENABLED', 'true').lower() in ('true', '1', 'yes')
@@ -441,32 +446,71 @@ class MQTTSubscriber:
         self.client.on_disconnect = self._on_disconnect
         self.client.on_message = self._on_message
         
-        # Configure K8S-SAT authentication
+        # Configure TLS before reading authentication material
         if mqtt_config['auth_method'] == 'K8S-SAT':
+            self._setup_tls()
             self._setup_sat_auth()
-        else:
+        elif mqtt_config['auth_method'].lower() == 'none':
+            if mqtt_config['port'] == 18883 or mqtt_config.get('use_tls', False):
+                self._setup_tls()
             logger.info("MQTT authentication disabled (local testing mode)")
-        
-        # Configure TLS (required for IoT Operations broker, optional for local testing)
-        if mqtt_config['port'] == 18883 or mqtt_config.get('use_tls', False):
-            self.client.tls_set(cert_reqs=ssl.CERT_NONE)
+        else:
+            raise ValueError(f"Unsupported MQTT authentication method: {mqtt_config['auth_method']}")
         
         logger.info(f"MQTT client initialized with ID: {client_id}")
+
+    def _setup_tls(self):
+        """Configure server-authenticated TLS for the MQTT connection."""
+        ca_path = Path(self.config['mqtt']['ca_cert_path'])
+
+        if not ca_path.exists():
+            logger.error(f"MQTT broker CA certificate not found at {ca_path}; refusing K8S-SAT MQTT connection")
+            raise RuntimeError("MQTT broker CA certificate is unavailable")
+
+        try:
+            if not ca_path.is_file():
+                raise OSError
+            ca_contents = ca_path.read_bytes()
+        except OSError:
+            logger.error(f"MQTT broker CA certificate at {ca_path} is unreadable; refusing K8S-SAT MQTT connection")
+            raise RuntimeError("MQTT broker CA certificate is unreadable")
+
+        if not ca_contents:
+            logger.error(f"MQTT broker CA certificate at {ca_path} is empty; refusing K8S-SAT MQTT connection")
+            raise RuntimeError("MQTT broker CA certificate is empty")
+
+        try:
+            self.client.tls_set(
+                ca_certs=str(ca_path),
+                cert_reqs=ssl.CERT_REQUIRED,
+                tls_version=ssl.PROTOCOL_TLS_CLIENT
+            )
+        except (OSError, ssl.SSLError):
+            logger.error(f"MQTT broker CA certificate at {ca_path} is invalid; refusing K8S-SAT MQTT connection")
+            raise RuntimeError("MQTT broker CA certificate is invalid")
+
+        logger.info(f"MQTT TLS configured with server verification ({ca_path})")
     
     def _setup_sat_auth(self):
         """Configure ServiceAccountToken authentication."""
         mqtt_config = self.config['mqtt']
         token_path = Path(mqtt_config['sat_token_path'])
         
-        # Skip SAT auth if token doesn't exist (local testing)
         if not token_path.exists():
-            if mqtt_config['auth_method'] == 'K8S-SAT':
-                logger.warning(f"SAT token not found at {token_path}, skipping authentication")
-                logger.warning("For local testing, use MQTT_AUTH_METHOD=none")
-            return
-        
-        token = token_path.read_text().strip()
-        logger.info(f"✓ Read SAT token from {token_path} ({len(token)} chars)")
+            logger.error(f"SAT token not found at {token_path}; refusing K8S-SAT MQTT connection")
+            raise RuntimeError("SAT token is unavailable")
+
+        try:
+            token = token_path.read_text().strip()
+        except OSError:
+            logger.error(f"SAT token at {token_path} is unreadable; refusing K8S-SAT MQTT connection")
+            raise RuntimeError("SAT token is unreadable")
+
+        if not token:
+            logger.error(f"SAT token at {token_path} is empty; refusing K8S-SAT MQTT connection")
+            raise RuntimeError("SAT token is empty")
+
+        logger.info(f"✓ Read SAT token from {token_path}")
         
         # Set up MQTT v5 enhanced authentication
         self.connect_properties = mqtt.Properties(mqtt.PacketTypes.CONNECT)

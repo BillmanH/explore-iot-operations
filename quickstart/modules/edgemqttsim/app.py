@@ -24,6 +24,7 @@ MQTT_CLIENT_ID = os.environ.get('MQTT_CLIENT_ID', f'factory-sim-{os.getpid()}')
 # ServiceAccountToken authentication settings
 AUTH_METHOD = os.environ.get('MQTT_AUTH_METHOD', 'K8S-SAT')  # Default to SAT
 SAT_TOKEN_PATH = os.environ.get('SAT_TOKEN_PATH', '/var/run/secrets/tokens/broker-sat')
+MQTT_CA_CERT_PATH = os.environ.get('MQTT_CA_CERT_PATH', '/var/run/certs/ca.crt')
 
 # Message generator configuration
 MESSAGE_CONFIG_PATH = os.environ.get('MESSAGE_CONFIG_PATH', 'message_structure.yaml')
@@ -44,18 +45,60 @@ stats_lock = threading.Lock()
 
 def get_sat_token():
     """Read the ServiceAccountToken from the mounted volume."""
-    try:
-        token_path = Path(SAT_TOKEN_PATH)
-        if token_path.exists():
-            token = token_path.read_text().strip()
-            print(f"[OK] Read SAT token from {SAT_TOKEN_PATH} ({len(token)} chars)")
-            return token
-        else:
-            print(f"[ERROR] SAT token file not found at {SAT_TOKEN_PATH}")
-            return None
-    except Exception as e:
-        print(f"[ERROR] Error reading SAT token: {e}")
+    token_path = Path(SAT_TOKEN_PATH)
+
+    if not token_path.exists():
+        print(f"[ERROR] SAT token not found at {token_path}; refusing K8S-SAT MQTT connection")
         return None
+
+    try:
+        if not token_path.is_file():
+            raise OSError
+        token = token_path.read_text().strip()
+    except OSError:
+        print(f"[ERROR] SAT token at {token_path} is unreadable; refusing K8S-SAT MQTT connection")
+        return None
+
+    if not token:
+        print(f"[ERROR] SAT token at {token_path} is empty; refusing K8S-SAT MQTT connection")
+        return None
+
+    print(f"[OK] Read SAT token from {token_path}")
+    return token
+
+
+def configure_tls(client):
+    """Configure server-authenticated TLS for the MQTT connection."""
+    ca_path = Path(MQTT_CA_CERT_PATH)
+
+    if not ca_path.exists():
+        print(f"[ERROR] MQTT broker CA certificate not found at {ca_path}; refusing K8S-SAT MQTT connection")
+        return False
+
+    try:
+        if not ca_path.is_file():
+            raise OSError
+        ca_contents = ca_path.read_bytes()
+    except OSError:
+        print(f"[ERROR] MQTT broker CA certificate at {ca_path} is unreadable; refusing K8S-SAT MQTT connection")
+        return False
+
+    if not ca_contents:
+        print(f"[ERROR] MQTT broker CA certificate at {ca_path} is empty; refusing K8S-SAT MQTT connection")
+        return False
+
+    try:
+        client.tls_set(
+            ca_certs=str(ca_path),
+            cert_reqs=ssl.CERT_REQUIRED,
+            tls_version=ssl.PROTOCOL_TLS_CLIENT,
+            ciphers=None
+        )
+    except (OSError, ssl.SSLError):
+        print(f"[ERROR] MQTT broker CA certificate at {ca_path} is invalid; refusing K8S-SAT MQTT connection")
+        return False
+
+    return True
 
 
 def on_connect(client, userdata, flags, reason_code, properties=None):
@@ -284,35 +327,31 @@ def main():
         transport="tcp"
     )
     
-    # Configure TLS for encrypted connection
+    if AUTH_METHOD != 'K8S-SAT':
+        print(f"\n✗ Unsupported authentication method '{AUTH_METHOD}'; refusing MQTT connection")
+        return
+
+    # Configure TLS before reading the ServiceAccount token
     print("🔒 Setting up TLS connection...")
-    client.tls_set(
-        ca_certs=None,  # Don't verify server cert (self-signed in cluster)
-        cert_reqs=ssl.CERT_NONE,
-        tls_version=ssl.PROTOCOL_TLS_CLIENT,
-        ciphers=None
-    )
-    client.tls_insecure_set(True)
-    print("✓ TLS configured (encrypted connection, no server verification)")
+    if not configure_tls(client):
+        return
+    print(f"✓ TLS configured with server verification ({MQTT_CA_CERT_PATH})")
     
     # Configure authentication
     connect_properties = None
     
-    if AUTH_METHOD == 'K8S-SAT':
-        print("\n🔑 Configuring ServiceAccountToken (K8S-SAT) authentication...")
-        token = get_sat_token()
-        if not token:
-            print("✗ Cannot connect without SAT token")
-            return
-        
-        connect_properties = mqtt.Properties(mqtt.PacketTypes.CONNECT)
-        connect_properties.AuthenticationMethod = 'K8S-SAT'
-        connect_properties.AuthenticationData = token.encode('utf-8')
-        
-        print("✓ K8S-SAT authentication configured")
-        print(f"  Token length: {len(token)} characters")
-    else:
-        print(f"\n⚠ Warning: Unknown authentication method '{AUTH_METHOD}'")
+    print("\n🔑 Configuring ServiceAccountToken (K8S-SAT) authentication...")
+    token = get_sat_token()
+    if not token:
+        print("✗ Cannot connect without SAT token")
+        return
+
+    connect_properties = mqtt.Properties(mqtt.PacketTypes.CONNECT)
+    connect_properties.AuthenticationMethod = 'K8S-SAT'
+    connect_properties.AuthenticationData = token.encode('utf-8')
+
+    print("✓ K8S-SAT authentication configured")
+    print(f"  Token length: {len(token)} characters")
     
     # Set callbacks
     client.on_connect = on_connect

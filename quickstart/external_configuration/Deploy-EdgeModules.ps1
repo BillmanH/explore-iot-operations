@@ -3,7 +3,7 @@
     Deploy edge modules to Azure IoT Operations cluster via kubectl through Azure Arc proxy
 
 .DESCRIPTION
-    This script deploys edge modules (edgemqttsim, hello-flask, sputnik, demohistorian)
+    This script deploys edge modules (edgemqttsim and demohistorian)
     to the Kubernetes cluster using kubectl through Azure Arc proxy. Runs remotely from Windows
     to edge device on different network.
     
@@ -35,7 +35,7 @@
     .\Deploy-EdgeModules.ps1 -ModuleName edgemqttsim
 
 .EXAMPLE
-    .\Deploy-EdgeModules.ps1 -ModuleName hello-flask -Force
+    .\Deploy-EdgeModules.ps1 -ModuleName demohistorian -Force
 
 .EXAMPLE
     .\Deploy-EdgeModules.ps1 -SkipBuild
@@ -51,7 +51,7 @@ param(
     [string]$ConfigPath,
     
     [Parameter(Mandatory=$false)]
-    [ValidateSet("edgemqttsim", "hello-flask", "sputnik", "demohistorian")]
+    [ValidateSet("edgemqttsim", "demohistorian")]
     [string]$ModuleName,
     
     [Parameter(Mandatory=$false)]
@@ -191,9 +191,7 @@ function Load-Configuration {
         Write-WarnLog "No modules section found in configuration, creating default"
         $modulesConfig = [PSCustomObject]@{
             edgemqttsim = $false
-            "hello-flask" = $false
-            sputnik = $false
-            "wasm-quality-filter-python" = $false
+            demohistorian = $false
         }
         $config | Add-Member -NotePropertyName "modules" -NotePropertyValue $modulesConfig -Force
     }
@@ -834,6 +832,75 @@ function Ensure-ServiceAccount {
     }
 }
 
+function Ensure-MqttBrokerTrustBundle {
+    param(
+        [string]$SourceNamespace = "azure-iot-operations",
+        [string]$TargetNamespace = "default",
+        [string]$ConfigMapName = "azure-iot-operations-aio-ca-trust-bundle"
+    )
+
+    Write-InfoLog "Refreshing MQTT broker CA trust bundle for namespace '$TargetNamespace'..."
+
+    $previousErrorPref = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+
+    try {
+        $sourceJson = kubectl get configmap $ConfigMapName -n $SourceNamespace -o json 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-ErrorLog "MQTT broker CA unavailable: ConfigMap $SourceNamespace/$ConfigMapName could not be read; deployment stopped."
+            Write-ErrorLog "kubectl output: $sourceJson"
+            return $false
+        }
+
+        try {
+            $sourceJsonText = $sourceJson -join [Environment]::NewLine
+            $sourceConfigMap = $sourceJsonText | ConvertFrom-Json -ErrorAction Stop
+            $caCertificate = $sourceConfigMap.data.'ca.crt'
+        }
+        catch {
+            Write-ErrorLog "MQTT broker CA unavailable: ConfigMap $SourceNamespace/$ConfigMapName is invalid; deployment stopped."
+            return $false
+        }
+
+        if ([string]::IsNullOrWhiteSpace($caCertificate)) {
+            Write-ErrorLog "MQTT broker CA unavailable: ConfigMap $SourceNamespace/$ConfigMapName does not contain ca.crt; deployment stopped."
+            return $false
+        }
+
+        $tempCaPath = Join-Path $env:TEMP "aio-mqtt-ca-$([guid]::NewGuid().ToString('N')).crt"
+        try {
+            [System.IO.File]::WriteAllText($tempCaPath, $caCertificate)
+
+            $configMapYaml = kubectl create configmap $ConfigMapName `
+                --namespace=$TargetNamespace `
+                --from-file="ca.crt=$tempCaPath" `
+                --dry-run=client -o yaml 2>&1
+
+            if ($LASTEXITCODE -ne 0) {
+                Write-ErrorLog "Failed to prepare MQTT broker CA ConfigMap in namespace '$TargetNamespace'."
+                Write-ErrorLog "kubectl output: $configMapYaml"
+                return $false
+            }
+
+            $applyResult = $configMapYaml | kubectl apply -f - 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-ErrorLog "Failed to apply MQTT broker CA ConfigMap in namespace '$TargetNamespace'."
+                Write-ErrorLog "kubectl output: $applyResult"
+                return $false
+            }
+        }
+        finally {
+            Remove-Item $tempCaPath -Force -ErrorAction SilentlyContinue
+        }
+
+        Write-Success "MQTT broker CA trust bundle refreshed: $SourceNamespace/$ConfigMapName -> $TargetNamespace/$ConfigMapName"
+        return $true
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorPref
+    }
+}
+
 function Ensure-AcrPullSecret {
     param(
         [string]$Registry,
@@ -852,19 +919,21 @@ function Ensure-AcrPullSecret {
     # Extract ACR name (everything before .azurecr.io)
     $acrName = $Registry -replace '\.azurecr\.io$', ''
 
-    # Get ACR admin credentials
-    Write-InfoLog "Fetching ACR credentials for '$acrName'..."
-    $acrCreds = az acr credential show --name $acrName 2>&1
+    # Use the signed-in Azure identity; do not require the ACR admin account.
+    Write-InfoLog "Requesting a short-lived ACR access token for '$acrName'..."
+    $acrToken = az acr login --name $acrName --expose-token --query accessToken -o tsv --only-show-errors 2>$null
     if ($LASTEXITCODE -ne 0) {
-        Write-ErrorLog "Failed to get ACR credentials: $acrCreds"
-        Write-WarnLog "Make sure admin user is enabled on the ACR:"
-        Write-Host "  az acr update --name $acrName --admin-enabled true" -ForegroundColor Cyan
+        Write-ErrorLog "Failed to obtain an ACR access token with the current Azure CLI identity."
+        Write-WarnLog "Confirm that the signed-in identity can pull images from '$acrName'."
         return $false
     }
 
-    $creds = $acrCreds | ConvertFrom-Json
-    $acrUser = $creds.username
-    $acrPass = $creds.passwords[0].value
+    $acrUser = "00000000-0000-0000-0000-000000000000"
+    $acrPass = ($acrToken | Out-String).Trim()
+    if ([string]::IsNullOrWhiteSpace($acrPass)) {
+        Write-ErrorLog "Azure CLI returned an empty ACR access token."
+        return $false
+    }
 
     # Create or update the secret (using --dry-run + apply for idempotency)
     Write-InfoLog "Creating/updating K8s pull secret '$SecretName'..."
@@ -876,13 +945,18 @@ function Ensure-AcrPullSecret {
         --dry-run=client -o yaml 2>&1
 
     if ($LASTEXITCODE -ne 0) {
-        Write-ErrorLog "Failed to generate pull secret YAML: $secretYaml"
+        Write-ErrorLog "Failed to generate the Kubernetes ACR pull secret."
+        $acrPass = $null
+        $acrToken = $null
         return $false
     }
 
     $applyResult = $secretYaml | kubectl apply -f - 2>&1
+    $acrPass = $null
+    $acrToken = $null
+    $secretYaml = $null
     if ($LASTEXITCODE -ne 0) {
-        Write-ErrorLog "Failed to apply pull secret: $applyResult"
+        Write-ErrorLog "Failed to apply ACR pull secret '$SecretName': $applyResult"
         return $false
     }
 
@@ -915,9 +989,7 @@ function Deploy-Module {
     }
     
     if ($isDeployed -and $ForceRedeploy) {
-        Write-InfoLog "Force redeployment requested, deleting existing deployment..."
-        kubectl delete deployment -n default -l app=$Module 2>$null
-        Start-Sleep -Seconds 3
+        Write-InfoLog "Force redeployment requested, applying the updated deployment..."
     }
     
     # Update deployment file with container registry if configured
@@ -1194,6 +1266,19 @@ function Main {
             Write-WarnLog "Failed to create service account - deployments may fail if they require it"
         }
         Write-Host ""
+
+        # Project the AIO-managed public broker CA into the module namespace.
+        $mqttModules = @($modulesToDeploy | Where-Object { $_ -in @("edgemqttsim", "demohistorian") })
+        if ($mqttModules.Count -gt 0) {
+            Write-Host "`n========================================" -ForegroundColor Cyan
+            Write-Host "Ensuring MQTT Broker Trust Bundle" -ForegroundColor Cyan
+            Write-Host "========================================" -ForegroundColor Cyan
+            $trustBundleResult = Ensure-MqttBrokerTrustBundle -TargetNamespace "default"
+            if (-not $trustBundleResult) {
+                throw "MQTT broker CA trust bundle setup failed"
+            }
+            Write-Host ""
+        }
 
         # Ensure ACR pull secret exists (required for private Azure Container Registry)
         if ($script:ContainerRegistry) {

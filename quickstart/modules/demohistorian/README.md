@@ -80,38 +80,16 @@ The Edge Historian is a containerized service that:
 ### Quick Deploy
 
 ```powershell
-# 1. Enable in configuration
-# Edit: linux_build/aio_config.json
-# Set: "demohistorian": true in modules section
+.\quickstart\external_configuration\Deploy-EdgeModules.ps1 -ConfigPath "<path-to-aio_config.json>" -ModuleName demohistorian -Force
 
-# 2. Deploy using automation script
-cd linux_build
-.\Deploy-EdgeModules.ps1 -ModuleName demohistorian
-
-# 3. Verify deployment
+# Verify deployment
 kubectl get pods -n default -l app=demohistorian
 kubectl logs -n default -l app=demohistorian -c historian -f
 ```
 
-### Manual Deployment
-
-```bash
-# Build and push container
-docker build -t <registry>/demohistorian:latest .
-docker push <registry>/demohistorian:latest
-
-# Update deployment.yaml with your registry
-sed -i 's|<YOUR_REGISTRY>|<registry>|g' deployment.yaml
-
-# Create BrokerAuthorization (CRITICAL - required for wildcard subscription)
-kubectl apply -f ../../linux_build/assets/historian-authorization.yaml
-
-# Deploy to cluster
-kubectl apply -f deployment.yaml
-
-# Check status
-kubectl get pods -n default -l app=demohistorian
-```
+The deployment script refreshes the AIO-managed MQTT broker CA trust bundle in
+`default` and mounts it automatically. When the configured registry is ACR, the
+script builds in ACR and does not require local Docker.
 
 ## BrokerAuthorization Setup
 
@@ -276,6 +254,7 @@ MQTT_BROKER=aio-broker.azure-iot-operations.svc.cluster.local
 MQTT_PORT=18883
 MQTT_AUTH_METHOD=K8S-SAT
 SAT_TOKEN_PATH=/var/run/secrets/tokens/broker-sat
+MQTT_CA_CERT_PATH=/var/run/certs/ca.crt
 
 # Database Configuration
 POSTGRES_HOST=localhost

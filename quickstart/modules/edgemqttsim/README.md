@@ -62,6 +62,7 @@ Messages are routed to different MQTT topics based on type:
 | `MQTT_CLIENT_ID` | `factory-sim-{pid}` | MQTT client identifier |
 | `MQTT_AUTH_METHOD` | `K8S-SAT` | Authentication method |
 | `SAT_TOKEN_PATH` | `/var/run/secrets/tokens/broker-sat` | Path to SAT token |
+| `MQTT_CA_CERT_PATH` | `/var/run/certs/ca.crt` | Path to the AIO broker CA |
 | `MESSAGE_CONFIG_PATH` | `message_structure.yaml` | Path to message config |
 | `PYTHONUNBUFFERED` | `1` | Python output buffering |
 
@@ -82,27 +83,22 @@ The `message_structure.yaml` file controls all aspects of message generation:
 ### Prerequisites
 
 - Kubernetes cluster with Azure IoT Operations installed
-- Service account `mqtt-client` with appropriate permissions
+- Azure Arc connectivity to the cluster
+- An `aio_config.json` file for the target environment
 - Container registry access
 
-### Build and Push
+### Quick Deploy
 
-```bash
-# Build the container
-docker build -t <YOUR_REGISTRY>/edgemqttsim:latest .
+From the repository root:
 
-# Push to registry
-docker push <YOUR_REGISTRY>/edgemqttsim:latest
+```powershell
+.\quickstart\external_configuration\Deploy-EdgeModules.ps1 -ConfigPath "<path-to-aio_config.json>" -ModuleName edgemqttsim -Force
 ```
 
-### Deploy to Kubernetes
-
-1. Update `deployment.yaml` with your container registry
-2. Apply the deployment:
-
-```bash
-kubectl apply -f deployment.yaml
-```
+The script builds and pushes the image, connects through Azure Arc, ensures the
+`mqtt-client` service account, refreshes the AIO-managed broker CA trust bundle in
+`default`, and applies `deployment.yaml`. When the configured registry is ACR, the
+script uses an ACR cloud build and does not require local Docker.
 
 ### Register Assets in Azure IoT Operations
 

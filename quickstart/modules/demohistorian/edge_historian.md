@@ -139,6 +139,14 @@ class MQTTSubscriber:
         
     def setup_authentication(self):
         """Configure ServiceAccountToken authentication for IoT Operations broker."""
+      # Validate the broker before reading or sending the SAT
+      ca_path = Path(self.config['mqtt']['ca_cert_path'])
+      self.client.tls_set(
+        ca_certs=str(ca_path),
+        cert_reqs=ssl.CERT_REQUIRED,
+        tls_version=ssl.PROTOCOL_TLS_CLIENT,
+      )
+
         # Read K8S ServiceAccountToken
         token_path = Path(self.config['mqtt']['sat_token_path'])
         token = token_path.read_text().strip()
@@ -147,9 +155,6 @@ class MQTTSubscriber:
         auth_properties = mqtt.Properties(packetType=mqtt.PacketTypes.CONNECT)
         auth_properties.AuthenticationMethod = 'K8S-SAT'
         auth_properties.AuthenticationData = token.encode('utf-8')
-        
-        # TLS required but no cert verification for in-cluster
-        self.client.tls_set(cert_reqs=ssl.CERT_NONE)
         
         return auth_properties
         
@@ -246,6 +251,7 @@ mqtt:
   reconnect_delay: 5  # seconds
   protocol_version: 5  # MQTT v5 required for K8S-SAT auth
   sat_token_path: /var/run/secrets/tokens/broker-sat
+  ca_cert_path: /var/run/certs/ca.crt
   sat_audience: aio-internal  # Must match broker configuration
   
 database:
@@ -633,6 +639,7 @@ data:
       reconnect_delay: 5
       protocol_version: 5
       sat_token_path: /var/run/secrets/tokens/broker-sat
+      ca_cert_path: /var/run/certs/ca.crt
       sat_audience: aio-internal
     
     database:
